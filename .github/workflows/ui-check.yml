@@ -36,7 +36,10 @@ jobs:
           flutter test test/widget_test.dart --reporter expanded 2>&1 | tee tests.txt
       - name: Render UI snapshots
         continue-on-error: true
-        run: flutter test test/ui_screenshots_test.dart --update-goldens --reporter expanded
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test test/ui_screenshots_test.dart --update-goldens --reporter expanded 2>&1 | tee snapshots.txt
       - name: Stage snapshots for review
         if: always()
         env:
@@ -45,11 +48,7 @@ jobs:
           for image in test/goldens/*.png; do
             [ -f "$image" ] || continue
             name=$(basename "$image" .png)
-            python3 - "$image" <<'PY'
-            import base64,json,sys
-            data=base64.b64encode(open(sys.argv[1],'rb').read()).decode()
-            json.dump({'content':data,'encoding':'base64'},open('/tmp/image-blob.json','w'))
-            PY
+            printf '{"content":"%s","encoding":"base64"}' "$(base64 -w0 "$image")" > /tmp/image-blob.json
             sha=$(gh api "repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/image-blob.json --jq .sha)
             echo "GOLDEN_${name}=$sha" >> "$GITHUB_ENV"
           done
@@ -85,7 +84,7 @@ jobs:
           python3 - <<'PY'
           import json,os,pathlib
           parts=[]
-          for name in ['pubget.txt','analysis.txt','tests.txt','build.txt']:
+          for name in ['pubget.txt','analysis.txt','tests.txt','snapshots.txt','build.txt']:
            p=pathlib.Path(name)
            if p.exists():
             content=p.read_text(errors='replace')
