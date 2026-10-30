@@ -142,6 +142,7 @@ class AudioManager {
 
   void setMusicVolume(double value) {
     _musicVolume = value.clamp(0.0, 1.0);
+    if (!_initialized) return;
     try {
       FlameAudio.bgm.audioPlayer.setVolume(_musicVolume * 0.6);
     } catch (e) {
