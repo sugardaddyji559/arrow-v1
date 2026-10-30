@@ -34,6 +34,25 @@ jobs:
         run: |
           set -o pipefail
           flutter test test/widget_test.dart --reporter expanded 2>&1 | tee tests.txt
+      - name: Render UI snapshots
+        continue-on-error: true
+        run: flutter test test/ui_screenshots_test.dart --update-goldens --reporter expanded
+      - name: Stage snapshots for review
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for image in test/goldens/*.png; do
+            [ -f "$image" ] || continue
+            name=$(basename "$image" .png)
+            python3 - "$image" <<'PY'
+            import base64,json,sys
+            data=base64.b64encode(open(sys.argv[1],'rb').read()).decode()
+            json.dump({'content':data,'encoding':'base64'},open('/tmp/image-blob.json','w'))
+            PY
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/image-blob.json --jq .sha)
+            echo "GOLDEN_${name}=$sha" >> "$GITHUB_ENV"
+          done
       - name: Build web preview
         shell: bash
         run: |
@@ -74,6 +93,7 @@ jobs:
              content='\n'.join(line for line in content.splitlines() if 'error •' in line or 'warning •' in line or 'issues found' in line)
             parts.append('## '+name+'\n```\n'+content[-18000:]+'\n```\n')
           parts.append('PREVIEW_BLOB='+os.environ.get('PREVIEW_BLOB','not-built'))
+          parts.extend(k+'='+v for k,v in os.environ.items() if k.startswith('GOLDEN_'))
           text='\n'.join(parts)[:65000]
           json.dump({'name':'Flutter diagnostics','head_sha':os.environ['GITHUB_SHA'],'status':'completed','conclusion':'neutral','output':{'title':'UI verification output','summary':'Flutter analysis, tests, build logs, and preview blob.','text':text}},open('/tmp/check.json','w'))
           PY

@@ -202,7 +202,7 @@ class GameState extends ChangeNotifier {
         final exitInfo1 = _computeExitInfo(arrow1, arrow2.id);
         final exitInfo2 = _computeExitInfo(arrow2, arrow1.id);
 
-        if (exitInfo1.blocked || exitInfo2.blocked) {
+        if (exitInfo1.blocked && exitInfo2.blocked) {
           return _handleGroupBlocked(grp, groupArrows);
         } else {
           _recordConsumedDots(arrow1.id, exitInfo1.consumed);

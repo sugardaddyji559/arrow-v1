@@ -393,7 +393,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void _zoomBy(double factor) {
     final scale = (_transformationController.value.getMaxScaleOnAxis() * factor).clamp(0.8, 4.0);
-    _transformationController.value = Matrix4.identity()..scaleByDouble(scale);
+    _transformationController.value = Matrix4.diagonal3Values(scale, scale, 1);
   }
 
   void _handleNextLevel() {

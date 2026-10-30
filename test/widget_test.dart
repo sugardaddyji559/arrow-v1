@@ -6,6 +6,7 @@ import 'package:arrow_escape/data/repositories/progress_repository.dart';
 import 'package:arrow_escape/game/game_state.dart';
 import 'package:arrow_escape/screens/challenge/challenge_screen.dart';
 import 'package:arrow_escape/screens/main_menu/main_menu_screen.dart';
+import 'package:arrow_escape/widgets/app_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/intl.dart';
@@ -41,21 +42,22 @@ void main() {
     expect(find.text('Continue'), findsOneWidget);
     expect(find.text('Tournament'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    Finder nav(String label) => find.descendant(of: find.byType(BottomNavigation), matching: find.text(label));
 
-    await tester.tap(find.text('Challenge'));
+    await tester.tap(nav('Challenge'));
     await tester.pumpAndSettle();
     expect(find.text(DateFormat('MMMM yyyy').format(DateTime.now())), findsOneWidget);
 
-    await tester.tap(find.text('Collection'));
+    await tester.tap(nav('Collection'));
     await tester.pumpAndSettle();
     expect(find.text('Small wins. Well earned.'), findsOneWidget);
 
-    await tester.tap(find.text('Settings'));
+    await tester.tap(nav('Settings'));
     await tester.pumpAndSettle();
     expect(find.text('Preferences'), findsOneWidget);
     expect(find.text('Account connection'), findsOneWidget);
 
-    await tester.tap(find.text('Home'));
+    await tester.tap(nav('Home'));
     await tester.pumpAndSettle();
     expect(find.text('Continue'), findsOneWidget);
     expect(tester.takeException(), isNull);

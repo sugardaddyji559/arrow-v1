@@ -81,7 +81,7 @@ class _DailyChallengeScreenState extends State<DailyChallengeScreen> {
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           RoundIconButton(icon: LucideIcons.chevronLeft, label: 'Previous month', size: 40, iconSize: 20,
             color: Colors.transparent, iconColor: AppColors.textSecondary, onPressed: () => _changeMonth(-1)),
-          Text(DateFormat('MMMM yyyy').format(_month), style: TextStyle(fontSize: 25, fontWeight: FontWeight.w900, color: AppColors.primary)),
+          Flexible(child: FittedBox(child: Text(DateFormat('MMMM yyyy').format(_month), style: TextStyle(fontSize: 25, fontWeight: FontWeight.w900, color: AppColors.primary)))),
           RoundIconButton(icon: LucideIcons.chevronRight, label: 'Next month', size: 40, iconSize: 20,
             color: Colors.transparent, iconColor: AppColors.textSecondary, onPressed: canGoForward ? () => _changeMonth(1) : null),
         ]),
@@ -90,7 +90,7 @@ class _DailyChallengeScreenState extends State<DailyChallengeScreen> {
           padding: const EdgeInsets.fromLTRB(12, 20, 12, 16),
           child: Column(children: [
             Row(children: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((day) => Expanded(
-              child: Center(child: Text(day, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.textSecondary))),
+              child: Center(child: FittedBox(child: Text(day, style: TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppColors.textSecondary)))),
             )).toList()),
             const SizedBox(height: 12),
             GridView.builder(
@@ -131,8 +131,8 @@ class _DailyChallengeScreenState extends State<DailyChallengeScreen> {
           ]),
         ),
         const SizedBox(height: 18),
-        Text(future ? 'A fresh puzzle is on its way' : '${DateFormat('MMMM d').format(_selected)} · Level ${ProgressRepository.dailyChallengeLevel(_selected)}',
-          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textSecondary)),
+        FittedBox(child: Text(future ? 'A fresh puzzle is on its way' : '${DateFormat('MMMM d').format(_selected)} · Level ${ProgressRepository.dailyChallengeLevel(_selected)}',
+          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.textSecondary))),
         const SizedBox(height: 14),
         AppButton(label: future ? 'Not yet available' : selectedDone ? 'Play again' : 'Play', height: 66,
           onPressed: future ? null : _play),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
@@ -15,10 +16,8 @@ class ArrowPuzzleApp extends StatelessWidget {
   const ArrowPuzzleApp({super.key});
 
   ThemeData _theme(Brightness brightness) {
-    final dark = brightness == Brightness.dark;
-    final base = ThemeData(brightness: brightness, useMaterial3: true);
+    final base = ThemeData(brightness: brightness, useMaterial3: true, fontFamily: 'Nunito');
     return base.copyWith(
-      fontFamily: 'Nunito',
       colorScheme: ColorScheme.fromSeed(seedColor: AppColors.primary, brightness: brightness).copyWith(
         primary: AppColors.primary,
         onPrimary: Colors.white,
