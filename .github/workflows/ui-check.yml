@@ -4,31 +4,73 @@ on:
     branches: ['arena/3301d7d1-arrow-v1']
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
+  checks: write
 jobs:
   flutter:
     runs-on: ubuntu-latest
-    timeout-minutes: 18
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.29.3'
+          flutter-version: '3.47.9'
           channel: stable
           cache: true
       - name: Configure local example ad IDs
         run: cp lib/core/ad_secrets_example.dart lib/core/ad_secrets.dart
-      - run: flutter pub get
+      - name: Resolve packages
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter pub get 2>&1 | tee pubget.txt
       - name: Analyze
+        shell: bash
         run: |
           flutter analyze --no-pub > analysis.txt 2>&1 || true
           cat analysis.txt
       - name: UI and interaction tests
-        run: flutter test test/widget_test.dart --reporter expanded
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter test test/widget_test.dart --reporter expanded 2>&1 | tee tests.txt
       - name: Build web preview
-        run: flutter build web --release --no-pub
+        shell: bash
+        run: |
+          set -o pipefail
+          flutter build web --release --no-pub 2>&1 | tee build.txt
+      - name: Stage preview for Arena
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tar -czf /tmp/web-preview.tar.gz -C build web
+          python3 - <<'PY'
+          import base64,json
+          data=base64.b64encode(open('/tmp/web-preview.tar.gz','rb').read()).decode()
+          json.dump({'content':data,'encoding':'base64'},open('/tmp/preview-blob.json','w'))
+          PY
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/git/blobs" --input /tmp/preview-blob.json --jq .sha)
+          echo "PREVIEW_BLOB=$sha" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: arrows-web-preview
           path: build/web
           retention-days: 3
+      - name: Publish readable diagnostics
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import json,os,pathlib
+          parts=[]
+          for name in ['pubget.txt','analysis.txt','tests.txt','build.txt']:
+           p=pathlib.Path(name)
+           if p.exists(): parts.append('## '+name+'\n```\n'+p.read_text(errors='replace')[-18000:]+'\n```\n')
+          parts.append('PREVIEW_BLOB='+os.environ.get('PREVIEW_BLOB','not-built'))
+          text='\n'.join(parts)[:65000]
+          json.dump({'name':'Flutter diagnostics','head_sha':os.environ['GITHUB_SHA'],'status':'completed','conclusion':'neutral','output':{'title':'UI verification output','summary':'Flutter analysis, tests, build logs, and preview blob.','text':text}},open('/tmp/check.json','w'))
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/check-runs" --input /tmp/check.json --jq .id
