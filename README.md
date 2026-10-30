@@ -41,6 +41,18 @@ Arrow Escape is a grid-based puzzle game where players slide arrows out of the g
 
 ---
 
+## UI redesign
+
+The app now uses a calm mint-and-white interface inspired by the supplied reference screens:
+
+- **Home** with streak pill, Challenge / Tournament cards, level status, and a single Continue action.
+- **Bottom navigation** for Home, Challenge, Collection, and Settings.
+- **Daily Challenge** calendar with persistent completion stars; challenges do not advance the campaign.
+- **Tournament** as a local solo time attack with saved personal bests (no fake online leaderboard).
+- **Collection** with level progress and earnable awards.
+- **Settings** with working sound, music, volume, vibration, and dark-mode controls. Account sync is shown as local-only until a backend is configured.
+- **Game screen** with restart, pause, free hints when ads are disabled, zoom controls, smoother head-first exits, collision feedback, and bundled Nunito fonts.
+
 ## Features
 
 | Feature | Description |

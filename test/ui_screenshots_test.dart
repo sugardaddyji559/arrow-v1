@@ -25,7 +25,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    SharedPreferences.setMockInitialValues({'currentLevel': 26, 'highestUnlockedLevel': 26, 'streakDays': 1});
+    SharedPreferences.setMockInitialValues({'currentLevel': 26, 'highestUnlockedLevel': 26, 'streakDays': 1, 'musicEnabled': false, 'hasSeenZoomHint': true, 'hasSeen40x40Warning': true});
     AppColors.updateTheme(false);
     final prefs = await SharedPreferences.getInstance();
     final levels = LevelRepository(prefs);
@@ -33,7 +33,7 @@ void main() {
     await tester.pumpWidget(MultiProvider(providers: [
       ChangeNotifierProvider(create: (_) => ProgressRepository(prefs)),
       Provider<LevelRepository>.value(value: levels),
-    ], child: MaterialApp(theme: ThemeData(fontFamily: 'Nunito', scaffoldBackgroundColor: Colors.white), home: screen)));
+    ], child: MaterialApp(debugShowCheckedModeBanner: false, theme: ThemeData(fontFamily: 'Nunito', scaffoldBackgroundColor: Colors.white), home: screen)));
     await tester.pumpAndSettle();
     await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/$name.png'));
   }

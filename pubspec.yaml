@@ -39,6 +39,7 @@ dependencies:
   package_info_plus: ^8.1.2
   url_launcher: ^6.3.0
   lucide_icons_flutter: ^3.1.14+2
+  cupertino_icons: ^1.0.8
   in_app_update: ^5.0.0
 
   # Firebase
@@ -74,5 +75,5 @@ flutter_launcher_icons:
   android: "launcher_icon"
   ios: false
   image_path: "assets/images/logo.png"
-  adaptive_icon_background: "#FAF6F0"
+  adaptive_icon_background: "#FFFFFF"
   adaptive_icon_foreground: "assets/images/logo.png"
