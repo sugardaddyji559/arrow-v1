@@ -9,6 +9,7 @@ class AudioManager {
   bool _soundEnabled = true;
   bool _musicEnabled = true;
   double _musicVolume = 0.6;
+  bool _initialized = false;
 
   bool get soundEnabled => _soundEnabled;
   bool get musicEnabled => _musicEnabled;
@@ -52,6 +53,7 @@ class AudioManager {
         _exitPools.add(pool);
       }
       _exitPoolsInitialized = true;
+      _initialized = true;
     } catch (e) {
       debugPrint('Error initializing FlameAudio: $e');
     }
@@ -60,7 +62,7 @@ class AudioManager {
   // ── Music ─────────────────────────────────────────────────────────────────────
 
   Future<void> playBgMusic() async {
-    if (!_musicEnabled) return;
+    if (!_musicEnabled || !_initialized) return;
     try {
       if (FlameAudio.bgm.isPlaying) return;
       await FlameAudio.bgm.play('underwater.mp3', volume: _musicVolume * 0.6);
@@ -78,6 +80,7 @@ class AudioManager {
   }
 
   Future<void> stopMusic() async {
+    if (!_initialized) return;
     try {
       await FlameAudio.bgm.stop();
     } catch (e) {
@@ -88,7 +91,7 @@ class AudioManager {
   // ── SFX ───────────────────────────────────────────────────────────────────────
 
   Future<void> playClick() async {
-    if (!_soundEnabled) return;
+    if (!_soundEnabled || !_initialized) return;
     try {
       if (_clickPoolInitialized) {
         await _clickPool.start(volume: 0.8);
@@ -103,7 +106,7 @@ class AudioManager {
   Future<void> playArrowTap() => _playTone('tap.wav');
 
   Future<void> playArrowExit() async {
-    if (!_soundEnabled) return;
+    if (!_soundEnabled || !_initialized) return;
     try {
       final poolIndex = _exitSoundIndex;
       _exitSoundIndex = (_exitSoundIndex + 1) % _exitSounds.length;
@@ -129,7 +132,7 @@ class AudioManager {
   Future<void> playStreakExtended() => _playTone('win.wav');
 
   Future<void> _playTone(String asset) async {
-    if (!_soundEnabled) return;
+    if (!_soundEnabled || !_initialized) return;
     try {
       await FlameAudio.play(asset, volume: 0.7);
     } catch (e) {
@@ -154,6 +157,7 @@ class AudioManager {
 
   void setMusicEnabled(bool value) {
     _musicEnabled = value;
+    if (!_initialized) return;
     if (!value) {
       stopMusic();
     } else {
@@ -162,6 +166,7 @@ class AudioManager {
   }
 
   void dispose() {
+    if (!_initialized) return;
     try {
       FlameAudio.bgm.dispose();
     } catch (e) {
