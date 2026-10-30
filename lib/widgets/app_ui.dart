@@ -195,7 +195,7 @@ class MintSwitch extends StatelessWidget {
     toggled: value,
     child: Switch.adaptive(
       value: value,
-      activeColor: AppColors.primary,
+      activeThumbColor: AppColors.primary,
       activeTrackColor: AppColors.primary,
       inactiveThumbColor: AppColors.surface,
       inactiveTrackColor: AppColors.primaryLight,

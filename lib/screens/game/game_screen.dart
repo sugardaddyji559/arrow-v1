@@ -19,7 +19,6 @@ import '../../game/arrow_puzzle_game.dart';
 import '../../game/game_state.dart';
 import '../../widgets/lives_bar.dart';
 import '../../widgets/wavy_progress_bar.dart';
-import '../../widgets/arrow_line.dart';
 import '../../widgets/app_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/audio_manager.dart';
@@ -341,7 +340,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void _revealHint() {
     if (!mounted || _gameState == null) return;
-    if (_game!.showHint()) {
+    if (_game.showHint()) {
       showAppMessage(context, 'Follow the mint glow. This arrow has a clear exit.');
       if (context.read<ProgressRepository>().vibrationEnabled) HapticFeedback.selectionClick();
     } else {
@@ -394,7 +393,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
 
   void _zoomBy(double factor) {
     final scale = (_transformationController.value.getMaxScaleOnAxis() * factor).clamp(0.8, 4.0);
-    _transformationController.value = Matrix4.identity()..scale(scale);
+    _transformationController.value = Matrix4.identity()..scaleByDouble(scale);
   }
 
   void _handleNextLevel() {

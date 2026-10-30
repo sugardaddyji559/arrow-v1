@@ -68,7 +68,11 @@ jobs:
           parts=[]
           for name in ['pubget.txt','analysis.txt','tests.txt','build.txt']:
            p=pathlib.Path(name)
-           if p.exists(): parts.append('## '+name+'\n```\n'+p.read_text(errors='replace')[-18000:]+'\n```\n')
+           if p.exists():
+            content=p.read_text(errors='replace')
+            if name=='analysis.txt':
+             content='\n'.join(line for line in content.splitlines() if 'error •' in line or 'warning •' in line or 'issues found' in line)
+            parts.append('## '+name+'\n```\n'+content[-18000:]+'\n```\n')
           parts.append('PREVIEW_BLOB='+os.environ.get('PREVIEW_BLOB','not-built'))
           text='\n'.join(parts)[:65000]
           json.dump({'name':'Flutter diagnostics','head_sha':os.environ['GITHUB_SHA'],'status':'completed','conclusion':'neutral','output':{'title':'UI verification output','summary':'Flutter analysis, tests, build logs, and preview blob.','text':text}},open('/tmp/check.json','w'))

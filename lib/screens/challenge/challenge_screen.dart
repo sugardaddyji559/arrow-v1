@@ -112,7 +112,7 @@ class _DailyChallengeScreenState extends State<DailyChallengeScreen> {
                   label: '${DateFormat('MMMM d').format(date)}${done ? ', completed' : ''}${isFuture ? ', upcoming' : ''}',
                   child: Material(
                     color: done ? AppColors.primary : isSelected ? AppColors.primaryLight : Colors.transparent,
-                    shape: CircleBorder(side: BorderSide(color: isSelected ? AppColors.primary : Colors.transparent, width: 2)),
+                    shape: CircleBorder(side: BorderSide(color: isSelected ? AppColors.primary : isToday ? AppColors.primary.withValues(alpha: .35) : Colors.transparent, width: 2)),
                     clipBehavior: Clip.antiAlias,
                     child: InkWell(onTap: () => setState(() => _selected = date), child: Center(
                       child: done ? Icon(LucideIcons.check, size: 21, color: isSelected ? Colors.white : AppColors.surface)
