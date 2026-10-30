@@ -80,6 +80,13 @@ class GridComponent extends PositionComponent {
     }
   }
 
+  bool highlightArrow(String id) {
+    final component = _arrowComponents[id];
+    if (component == null) return false;
+    component.showHint();
+    return true;
+  }
+
   void rebuild() {
     _refreshMask();
     _buildArrows();
@@ -107,7 +114,7 @@ class GridComponent extends PositionComponent {
     final inR = baseDot;
 
     final inPaint = Paint()
-      ..color = AppColors.isDark ? const Color(0x3CFFFFFF) : const Color(0xFFC8BFB0)
+      ..color = AppColors.isDark ? const Color(0x3CFFFFFF) : const Color(0xFFDDE7E5)
       ..style = PaintingStyle.fill;
 
     for (int r = 0; r < gridSize; r++) {

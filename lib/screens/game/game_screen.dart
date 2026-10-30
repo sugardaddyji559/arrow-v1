@@ -6,7 +6,6 @@ import 'package:flame/game.dart' hide Matrix4;
 import 'package:provider/provider.dart';
 import '../../widgets/unified_banner_ad.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:confetti/confetti.dart';
 
 import '../../core/app_colors.dart';
@@ -21,6 +20,7 @@ import '../../game/game_state.dart';
 import '../../widgets/lives_bar.dart';
 import '../../widgets/wavy_progress_bar.dart';
 import '../../widgets/arrow_line.dart';
+import '../../widgets/app_ui.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import '../../core/audio_manager.dart';
 
@@ -51,6 +51,10 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   bool _isTimeoutState = false;
   bool _isGamePaused = false;
   bool _isAppBackgrounded = false;
+  String? _challengeDate;
+  bool _isTournament = false;
+  int _tournamentTimeLimit = 0;
+  bool _hintBusy = false;
 
   late final TransformationController _transformationController;
 
@@ -69,6 +73,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final args =
         ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
     final levelNum = args?['level'] as int? ?? 1;
+    _challengeDate = args?['challengeDate'] as String?;
+    _isTournament = args?['mode'] == 'tournament';
+    _tournamentTimeLimit = args?['timeLimit'] as int? ?? 0;
     if (_loadedLevelNum != levelNum) {
       _loadedLevelNum = levelNum;
       _loadLevelAsync(levelNum);
@@ -154,6 +161,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   void _onLifeLost() {
     if (!mounted) return;
     setState(() => _lives = _gameState!.lives);
+    AudioManager.instance.playLifeLost();
     if (context.read<ProgressRepository>().vibrationEnabled) {
       HapticFeedback.heavyImpact();
     }
@@ -163,6 +171,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     if (!mounted || _showingComplete) return;
     _levelTimer?.cancel();
     setState(() => _showingComplete = true);
+    AudioManager.instance.playLevelComplete();
     if (context.read<ProgressRepository>().vibrationEnabled) {
       HapticFeedback.lightImpact();
     }
@@ -174,7 +183,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final score =
         AppConstants.baseScore + (_lives * AppConstants.bonusPerRemainingLife);
 
-    progress.recordLevelComplete(LevelResult(
+    final result = LevelResult(
       levelNumber: _level.levelNumber,
       stars: stars,
       score: score,
@@ -182,10 +191,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       livesLost: _gameState!.livesLost,
       completed: true,
       completedAt: DateTime.now(),
-    ));
-
-    final levelType = AppConstants.levelTypeFor(_level.levelNumber);
-    adManager.onLevelComplete(_level.levelNumber, levelType.isSpecial);
+    );
+    final challengeDate = _challengeDate == null ? null : DateTime.tryParse(_challengeDate!);
+    if (challengeDate != null) {
+      progress.recordDailyChallenge(challengeDate, stars, score);
+    } else if (_isTournament) {
+      progress.recordTournamentBest(_level.levelNumber, _totalTime - _timeRemaining);
+      progress.addCoins(score);
+    } else {
+      progress.recordLevelComplete(result);
+      final levelType = AppConstants.levelTypeFor(_level.levelNumber);
+      adManager.onLevelComplete(_level.levelNumber, levelType.isSpecial);
+    }
 
     Future.delayed(const Duration(milliseconds: 300), () {
       if (mounted) {
@@ -231,6 +248,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _showDeadlockDialog() async {
+    _gameState?.setPaused(true);
     await showDialog(
       context: context,
       barrierDismissible: false,
@@ -238,12 +256,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         level: _level,
         onRestart: () {
           Navigator.pop(context);
-          _handleRestart();
+          _handleRestart(confirm: false);
         },
-        onMenu: () {
-          Navigator.pop(context);
-          _handleMenu();
-        },
+        onMenu: _handleMenu,
         onInspect: () {
           Navigator.pop(context);
           setState(() {
@@ -252,9 +267,30 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         },
       ),
     );
+    if (mounted && _inspectingDeadlock) _pauseGame(false);
   }
 
-  Future<void> _handleRestart() async {
+  Future<void> _handleRestart({bool confirm = true}) async {
+    if (confirm && (_gameState?.movesUsed ?? 0) > 0 && !_showingComplete && !_showingGameOver) {
+      _pauseGame(true);
+      final restart = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(26)),
+          title: Text('Start fresh?', style: TextStyle(fontWeight: FontWeight.w900, color: AppColors.ink)),
+          content: Text('This board will reset and your three hearts will be restored.',
+            style: TextStyle(color: AppColors.textSecondary, height: 1.5)),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Keep playing')),
+            TextButton(onPressed: () => Navigator.pop(context, true), child: const Text('Restart')),
+          ],
+        ),
+      );
+      if (!mounted) return;
+      _pauseGame(false);
+      if (restart != true) return;
+    }
     final totalArrows = _level.arrows.length;
     final activeArrows =
         _gameState?.arrows.where((a) => a.state != ArrowState.sliding).length ??
@@ -274,6 +310,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         _showingComplete = false;
         _showingDeadlock = false;
         _inspectingDeadlock = false;
+        _isGamePaused = false;
+        _transformationController.value = Matrix4.identity();
         _game.resetLevel();
         _lives = AppConstants.maxLives;
         _resetTimerForLevel();
@@ -282,34 +320,105 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _showSettingsDialog() async {
-    setState(() => _isGamePaused = true);
+    _pauseGame(true);
     await showDialog(
       context: context,
       barrierDismissible: true,
       builder: (_) => _GameSettingsDialog(
         onRestart: () {
           Navigator.pop(context);
-          _handleRestart();
+          _handleRestart(confirm: false);
         },
       ),
     );
-    if (mounted) {
-      setState(() => _isGamePaused = false);
+    if (mounted) _pauseGame(false);
+  }
+
+  void _pauseGame(bool paused) {
+    setState(() => _isGamePaused = paused);
+    _gameState?.setPaused(paused);
+  }
+
+  void _revealHint() {
+    if (!mounted || _gameState == null) return;
+    if (_game!.showHint()) {
+      showAppMessage(context, 'Follow the mint glow. This arrow has a clear exit.');
+      if (context.read<ProgressRepository>().vibrationEnabled) HapticFeedback.selectionClick();
+    } else {
+      showAppMessage(context, 'No clear exit yet. Try restarting for a fresh board.');
     }
+  }
+
+  void _requestHint() {
+    if (_hintBusy || _isGamePaused || _showingComplete || _showingGameOver) return;
+    if (AppConstants.enableAdMob || AppConstants.enableUnityAds) {
+      setState(() => _hintBusy = true);
+      _pauseGame(true);
+      context.read<AdManager>().showRewardedWithLoader(context,
+        onRewarded: _revealHint,
+        onDismissed: () {
+          if (!mounted) return;
+          setState(() => _hintBusy = false);
+          _pauseGame(false);
+        });
+    } else {
+      _revealHint();
+    }
+  }
+
+  Future<void> _showHelp() async {
+    _pauseGame(true);
+    await showAppSheet(context, title: 'Make a little space', child: Column(children: [
+      _helpRow(LucideIcons.mousePointer2, 'Tap an arrow', 'If its path is clear, it slides out. Clear every arrow to finish.'),
+      _helpRow(LucideIcons.heart, 'Look before you tap', 'A blocked arrow costs one heart. You have three per board.'),
+      _helpRow(LucideIcons.lightbulb, 'Need a nudge?', 'The hint button gives a legal arrow a mint glow. Hold an arrow to preview its path.'),
+      _helpRow(LucideIcons.zoomIn, 'Get a closer look', 'Pinch to zoom, drag to pan, or use the zoom controls. Colored pairs leave together; gold dots redirect arrows.'),
+      const SizedBox(height: 10),
+      AppButton(label: 'Got it', onPressed: () => Navigator.pop(context)),
+    ]));
+    if (mounted) _pauseGame(false);
+  }
+
+  Widget _helpRow(IconData icon, String title, String body) => Padding(
+    padding: const EdgeInsets.only(bottom: 20),
+    child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Icon(icon, color: AppColors.primary, size: 25),
+      const SizedBox(width: 15),
+      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(title, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900, color: AppColors.ink)),
+        const SizedBox(height: 4),
+        Text(body, style: TextStyle(fontSize: 14, height: 1.5, color: AppColors.textSecondary)),
+      ])),
+    ]),
+  );
+
+  void _zoomBy(double factor) {
+    final scale = (_transformationController.value.getMaxScaleOnAxis() * factor).clamp(0.8, 4.0);
+    _transformationController.value = Matrix4.identity()..scale(scale);
   }
 
   void _handleNextLevel() {
     Navigator.pop(context);
-    Navigator.pushReplacementNamed(
-      context,
-      '/game',
-      arguments: {'level': _level.levelNumber + 1},
-    );
+    _exitCompletedLevel();
+  }
+
+  /// Called after the completion dialog has already been dismissed.
+  void _exitCompletedLevel() {
+    if (_isTournament || _challengeDate != null) {
+      Navigator.pop(context);
+      return;
+    }
+    Navigator.pushReplacementNamed(context, '/game',
+      arguments: {'level': _level.levelNumber + 1});
   }
 
   void _handleMenu() {
     Navigator.pop(context);
-    Navigator.pushReplacementNamed(context, '/menu');
+    if (_isTournament || _challengeDate != null) {
+      Navigator.pop(context);
+    } else {
+      Navigator.pushReplacementNamed(context, '/menu');
+    }
   }
 
   void _handleDoubleCoins() {
@@ -322,17 +431,18 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         rewarded = true;
         context.read<ProgressRepository>().addCoins(AppConstants.baseScore +
             (_lives * AppConstants.bonusPerRemainingLife));
-        _handleNextLevel();
+        _exitCompletedLevel();
       },
       onDismissed: () {
         if (!rewarded) {
-          _handleNextLevel();
+          _exitCompletedLevel();
         }
       },
     );
   }
 
   Future<void> _showLevelCompleteDialog(int stars, int score) async {
+    _gameState?.setPaused(true);
     await showDialog(
       context: context,
       barrierDismissible: false,
@@ -345,6 +455,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             onNextLevel: _handleNextLevel,
             onMenu: _handleMenu,
             onDoubleCoins: _handleDoubleCoins,
+            onNextLevelLabel: _isTournament ? 'Back to Tournament' : _challengeDate != null ? 'Back to Calendar' : 'Next Level',
           ),
           // Top Center Explosive Confetti (Subtle)
           Align(
@@ -427,6 +538,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _showGameOverDialog() async {
+    _gameState?.setPaused(true);
     final levelType = AppConstants.levelTypeFor(_level.levelNumber);
     final hasTimer = (levelType == LevelType.god && _level.levelNumber > 100) ||
         (levelType == LevelType.boss && _level.levelNumber > 200);
@@ -458,6 +570,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               if (!mounted) return;
               setState(() {
                 _showingGameOver = false;
+                _pauseGame(false);
                 if (_isTimeoutState) {
                   _timeRemaining = continueTime; // Add dynamic extra time
                   _isTimeoutState = false;
@@ -478,7 +591,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   SnackBar(
                     content: Text(
                       'Ad not completed. Try watching again or restart.',
-                      style: GoogleFonts.nunito(
+                      style: TextStyle(
                         fontWeight: FontWeight.w800,
                         color: Colors.white,
                       ),
@@ -497,12 +610,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
         },
         onRestart: () {
           Navigator.pop(context);
-          _handleRestart();
+          _handleRestart(confirm: false);
         },
-        onMenu: () {
-          Navigator.pop(context);
-          Navigator.pushReplacementNamed(context, '/menu');
-        },
+        onMenu: _handleMenu,
       ),
     );
   }
@@ -513,6 +623,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _levelTimer?.cancel();
     _gameState?.removeListener(_onGameStateChanged);
+    _gameState?.dispose();
     _confettiController.dispose();
     super.dispose();
   }
@@ -587,8 +698,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
     final hasTimer = (levelType == LevelType.god && _level.levelNumber > 100) ||
         (levelType == LevelType.boss && _level.levelNumber > 200);
 
-    if (hasTimer) {
-      _totalTime = _calculateLevelTimerDuration(
+    if (hasTimer || _isTournament) {
+      _totalTime = _isTournament ? _tournamentTimeLimit : _calculateLevelTimerDuration(
           _level.levelNumber, _level.arrows.length);
       _timeRemaining = _totalTime;
       _startLevelTimer();
@@ -644,6 +755,9 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
       final args =
           ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
       final levelNum = args?['level'] as int? ?? 1;
+    _challengeDate = args?['challengeDate'] as String?;
+    _isTournament = args?['mode'] == 'tournament';
+    _tournamentTimeLimit = args?['timeLimit'] as int? ?? 0;
       return _LevelLoadingScreen(levelNumber: levelNum);
     }
 
@@ -678,6 +792,8 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   }
                 },
                 onSettings: _showSettingsDialog,
+                onRestart: _handleRestart,
+                isChallenge: _challengeDate != null || _isTournament,
               ),
 
               if (_totalTime > 0)
@@ -701,7 +817,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     // handles non-square grids by fitting activeCols × activeRows.
                     final boardW = constraints.maxWidth;
                     final boardH = constraints.maxHeight;
-                    final fadeH = boardH * 0.10;
+                    final fadeH = min(24.0, boardH * 0.04);
                     return Stack(
                       alignment: Alignment.center,
                       children: [
@@ -725,6 +841,16 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                             ),
                           ),
                         ),
+                        Positioned(bottom: 8, right: 14, child: Row(children: [
+                          RoundIconButton(icon: LucideIcons.zoomOut, label: 'Zoom out', size: 38, iconSize: 18,
+                            color: AppColors.surface, shadow: true, onPressed: () => _zoomBy(1 / 1.25)),
+                          const SizedBox(width: 7),
+                          RoundIconButton(icon: LucideIcons.maximize, label: 'Reset zoom', size: 38, iconSize: 18,
+                            color: AppColors.surface, shadow: true, onPressed: () { _transformationController.value = Matrix4.identity(); }),
+                          const SizedBox(width: 7),
+                          RoundIconButton(icon: LucideIcons.zoomIn, label: 'Zoom in', size: 38, iconSize: 18,
+                            color: AppColors.surface, shadow: true, onPressed: () => _zoomBy(1.25)),
+                        ])),
                         // Top fade — fixed overlay, non-interactive
                         Positioned(
                           top: 0,
@@ -773,16 +899,25 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 ),
               ),
 
-              // ── Banner Ad (centered and sized to avoid layout warnings) ──
-              Container(
-                alignment: Alignment.center,
-                width: double.infinity,
-                height: 50,
-                child: const UnifiedBannerAd(
+              Padding(
+                padding: const EdgeInsets.fromLTRB(22, 8, 22, 28),
+                child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  RoundIconButton(icon: LucideIcons.lightbulb, label: 'Highlight a solvable arrow',
+                    size: 72, iconSize: 34, color: AppColors.surface, iconColor: AppColors.primary,
+                    shadow: true, onPressed: _hintBusy ? null : _requestHint,
+                    badge: (AppConstants.enableAdMob || AppConstants.enableUnityAds) ? Container(
+                      padding: const EdgeInsets.all(5), decoration: BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
+                      child: const Icon(LucideIcons.play, color: Colors.white, size: 12)) : null),
+                  const SizedBox(width: 24),
+                  RoundIconButton(icon: LucideIcons.hash, label: 'How to play', size: 72, iconSize: 34,
+                    color: AppColors.surface, iconColor: AppColors.primary, shadow: true, onPressed: _showHelp),
+                ]),
+              ),
+              if (AppConstants.enableAdMob || AppConstants.enableUnityAds)
+                const SizedBox(height: 50, child: UnifiedBannerAd(
                   admobUnitId: AppConstants.admobBannerUnitId,
                   unityPlacementId: AppConstants.unityBannerAdId,
-                ),
-              ),
+                )),
             ],
           ),
         ),
@@ -800,7 +935,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
               icon: const Icon(LucideIcons.menu, color: Colors.white),
               label: Text(
                 'Deadlock Options',
-                style: GoogleFonts.nunito(
+                style: TextStyle(
                   fontWeight: FontWeight.w800,
                   color: Colors.white,
                 ),
@@ -866,7 +1001,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 Expanded(
                   child: Text(
                     'Pinch to zoom in or out to see small arrows easily!',
-                    style: GoogleFonts.nunito(
+                    style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: Colors.white,
                     ),
@@ -898,7 +1033,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
             decoration: BoxDecoration(
               color: AppColors.background,
               borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: AppColors.surfaceLight, width: 3),
+              border: Border.all(color: AppColors.surfaceLight),
               boxShadow: [
                 BoxShadow(
                   color: AppColors.primary.withValues(alpha: 0.15),
@@ -922,7 +1057,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 Text(
                   'Massive Grid Alert!',
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.nunito(
+                  style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w900,
                     color: AppColors.textPrimary,
@@ -932,7 +1067,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 Text(
                   'You are about to play a massive 40×40 level! On grids of this size, deadlocks (where all remaining arrows are blocked) are very common.\n\nBe extremely careful about your tap order. If you get stuck, look out for the Deadlock dialog to restart!',
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.nunito(
+                  style: TextStyle(
                     fontSize: 14,
                     color: AppColors.textSecondary,
                     height: 1.4,
@@ -961,7 +1096,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     child: Center(
                       child: Text(
                         'Got It!',
-                        style: GoogleFonts.nunito(
+                        style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
@@ -1027,7 +1162,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                   ),
                   child: Text(
                     'TUTORIAL STEP $stepText',
-                    style: GoogleFonts.nunito(
+                    style: TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w900,
                       color: iconColor,
@@ -1055,7 +1190,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 Text(
                   title,
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.nunito(
+                  style: TextStyle(
                     fontSize: 22,
                     fontWeight: FontWeight.w900,
                     color: AppColors.textPrimary,
@@ -1065,7 +1200,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                 Text(
                   description,
                   textAlign: TextAlign.center,
-                  style: GoogleFonts.nunito(
+                  style: TextStyle(
                     fontSize: 14,
                     color: AppColors.textSecondary,
                     height: 1.4,
@@ -1096,7 +1231,7 @@ class _GameScreenState extends State<GameScreen> with WidgetsBindingObserver {
                     child: Center(
                       child: Text(
                         'Start Tutorial',
-                        style: GoogleFonts.nunito(
+                        style: TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
@@ -1431,7 +1566,7 @@ class _TimerDisplay extends StatelessWidget {
     final progress = (timeRemaining / totalTime).clamp(0.0, 1.0);
 
     final color = isLowTime
-        ? const Color(0xFFCC2200) // Vibrant red/orange warning
+        ? AppColors.heartRed // Vibrant red/orange warning
         : (levelType == LevelType.god
             ? AppColors.accent
             : AppColors.accentOrange);
@@ -1443,7 +1578,7 @@ class _TimerDisplay extends StatelessWidget {
         color: AppColors.surface.withValues(alpha: 0.8),
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isLowTime ? const Color(0xFFCC2200) : AppColors.surfaceLight,
+          color: isLowTime ? AppColors.heartRed : AppColors.surfaceLight,
           width: 1.5,
         ),
         boxShadow: [
@@ -1468,7 +1603,7 @@ class _TimerDisplay extends StatelessWidget {
               const SizedBox(width: 6),
               Text(
                 _formatTime(timeRemaining),
-                style: GoogleFonts.nunito(
+                style: TextStyle(
                   fontSize: 14,
                   fontWeight: FontWeight.w900,
                   color: color,
@@ -1518,138 +1653,37 @@ class _TopBar extends StatelessWidget {
   final double progress;
   final VoidCallback onBack;
   final VoidCallback onSettings;
+  final VoidCallback onRestart;
+  final bool isChallenge;
 
-  const _TopBar({
-    required this.level,
-    required this.levelType,
-    required this.lives,
-    required this.progress,
-    required this.onBack,
-    required this.onSettings,
-  });
+  const _TopBar({required this.level, required this.levelType, required this.lives,
+    required this.progress, required this.onBack, required this.onSettings,
+    required this.onRestart, this.isChallenge = false});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      height: 115,
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Stack(
-        fit: StackFit.expand,
-        children: [
-          // Left Side (Back Button aligned left)
-          Align(
-            alignment: Alignment.centerLeft,
-            child: GestureDetector(
-              onTap: () {
-                AudioManager.instance.playClick();
-                onBack();
-              },
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceLight,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(LucideIcons.arrowLeft,
-                    color: AppColors.textPrimary, size: 18),
-              ),
-            ),
-          ),
-
-          // Center Side (Level Label, Progress Bar & Lives, perfectly centered)
-          Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                if (levelType.isSpecial)
-                  FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Container(
-                      margin: const EdgeInsets.only(bottom: 4),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: (levelType == LevelType.god
-                                ? AppColors.accent
-                                : AppColors.accentOrange)
-                            .withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            levelType == LevelType.god
-                                ? LucideIcons.flame
-                                : LucideIcons.zap,
-                            color: levelType == LevelType.god
-                                ? AppColors.accent
-                                : AppColors.accentOrange,
-                            size: 10,
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            levelType.label.toUpperCase(),
-                            style: GoogleFonts.nunito(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w900,
-                              color: levelType == LevelType.god
-                                  ? AppColors.accent
-                                  : AppColors.accentOrange,
-                              letterSpacing: 1.0,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                FittedBox(
-                  fit: BoxFit.scaleDown,
-                  child: Text(
-                    'Level ${level.levelNumber}',
-                    style: GoogleFonts.nunito(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w900,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 5),
-                // Level progress bar with horizontal wavy liquid animation (width adjusted to 130, height to 10.0)
-                WavyProgressBar(
-                  progress: progress,
-                  width: 130,
-                  height: 10.0,
-                ),
-                const SizedBox(height: 6),
-                // Lives bar centered below the progress bar
-                LivesBar(lives: lives, maxLives: AppConstants.maxLives),
-              ],
-            ),
-          ),
-
-          // Right Side (Settings Button aligned right)
-          Align(
-            alignment: Alignment.centerRight,
-            child: GestureDetector(
-              onTap: () {
-                AudioManager.instance.playClick();
-                onSettings();
-              },
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.surfaceLight,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Icon(LucideIcons.settings,
-                    color: AppColors.textPrimary, size: 18),
-              ),
-            ),
-          ),
-        ],
-      ),
+    final difficulty = levelType.isSpecial ? levelType.label : Difficulty.forLevel(level.levelNumber).label;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(22, 16, 22, 10),
+      child: Column(children: [
+        SizedBox(height: 78, child: Row(children: [
+          RoundIconButton(icon: LucideIcons.arrowLeft, label: 'Back', onPressed: onBack),
+          const SizedBox(width: 12),
+          RoundIconButton(icon: LucideIcons.rotateCcw, label: 'Restart level', onPressed: onRestart),
+          Expanded(child: Semantics(label: 'Level ${level.levelNumber}, $difficulty', child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(difficulty, style: TextStyle(fontSize: 23, fontWeight: FontWeight.w900, color: AppColors.difficultyColor(level.levelNumber))),
+              const SizedBox(height: 5),
+              LivesBar(lives: lives, maxLives: AppConstants.maxLives),
+            ],
+          ))),
+          RoundIconButton(icon: LucideIcons.pause, label: 'Pause game', size: 42, iconSize: 20,
+            color: Colors.transparent, iconColor: AppColors.textMuted, onPressed: onSettings),
+        ])),
+        const SizedBox(height: 12),
+        WavyProgressBar(progress: progress, width: double.infinity, height: 8),
+      ]),
     );
   }
 }
@@ -1663,6 +1697,7 @@ class _LevelCompleteDialog extends StatelessWidget {
   final VoidCallback onNextLevel;
   final VoidCallback onMenu;
   final VoidCallback onDoubleCoins;
+  final String onNextLevelLabel;
 
   const _LevelCompleteDialog({
     required this.level,
@@ -1671,6 +1706,7 @@ class _LevelCompleteDialog extends StatelessWidget {
     required this.onNextLevel,
     required this.onMenu,
     required this.onDoubleCoins,
+    this.onNextLevelLabel = 'Next Level',
   });
 
   bool get _showAds =>
@@ -1685,9 +1721,9 @@ class _LevelCompleteDialog extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(28),
         decoration: BoxDecoration(
-          color: AppColors.background,
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: AppColors.surfaceLight, width: 3),
+          border: Border.all(color: AppColors.surfaceLight),
           boxShadow: [
             BoxShadow(
                 color: AppColors.primary.withValues(alpha: 0.15),
@@ -1708,7 +1744,7 @@ class _LevelCompleteDialog extends StatelessWidget {
                 curve: Curves.elasticOut),
             const SizedBox(height: 12),
             Text('Level Complete!',
-                style: GoogleFonts.nunito(
+                style: TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.w900,
                     color: AppColors.textPrimary)),
@@ -1726,7 +1762,7 @@ class _LevelCompleteDialog extends StatelessWidget {
                               ? Icons.star_rounded
                               : Icons.star_border_rounded,
                           color: i < stars
-                              ? const Color(0xFFE2B93C)
+                              ? AppColors.starYellow
                               : AppColors.surfaceLight,
                           size: 38,
                         ),
@@ -1758,7 +1794,7 @@ class _LevelCompleteDialog extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   Text('+$score',
-                      style: GoogleFonts.nunito(
+                      style: TextStyle(
                           fontSize: 22,
                           fontWeight: FontWeight.w800,
                           color: AppColors.accentGold)),
@@ -1793,7 +1829,7 @@ class _LevelCompleteDialog extends StatelessWidget {
                     Text(
                       'You Finished the Game!',
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.nunito(
+                      style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w900,
                         color: AppColors.accentGold,
@@ -1803,7 +1839,7 @@ class _LevelCompleteDialog extends StatelessWidget {
                     Text(
                       'Congratulations! You\'ve solved all 500 challenges. Stay tuned for more levels coming soon!',
                       textAlign: TextAlign.center,
-                      style: GoogleFonts.nunito(
+                      style: TextStyle(
                         fontSize: 13,
                         color: AppColors.textSecondary,
                         height: 1.3,
@@ -1815,7 +1851,7 @@ class _LevelCompleteDialog extends StatelessWidget {
               const SizedBox(height: 20),
             ] else ...[
               _DialogButton(
-                label: 'Next Level',
+                label: onNextLevelLabel,
                 icon: Icons.play_arrow_rounded,
                 gradient: AppColors.primaryGradient,
                 onTap: onNextLevel,
@@ -1842,7 +1878,7 @@ class _LevelCompleteDialog extends StatelessWidget {
                 onMenu();
               },
               child: Text('Back to Menu',
-                  style: GoogleFonts.nunito(color: AppColors.textSecondary)),
+                  style: TextStyle(color: AppColors.textSecondary)),
             ),
           ],
         ),
@@ -1882,9 +1918,9 @@ class _GameOverDialog extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(28),
         decoration: BoxDecoration(
-          color: AppColors.background,
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: AppColors.surfaceLight, width: 3),
+          border: Border.all(color: AppColors.surfaceLight),
           boxShadow: [
             BoxShadow(
                 color: AppColors.primary.withValues(alpha: 0.15),
@@ -1901,7 +1937,7 @@ class _GameOverDialog extends StatelessWidget {
             ).animate().shake(duration: 500.ms),
             const SizedBox(height: 12),
             Text(isTimeout ? 'Out of Time!' : 'Out of Lives!',
-                style: GoogleFonts.nunito(
+                style: TextStyle(
                     fontSize: 26,
                     fontWeight: FontWeight.w900,
                     color: AppColors.textPrimary)),
@@ -1912,7 +1948,7 @@ class _GameOverDialog extends StatelessWidget {
                   isTimeout
                       ? 'Watch an ad to get +$continueTime seconds and continue'
                       : 'Watch an ad to get 1 more life and continue',
-                  style: GoogleFonts.nunito(
+                  style: TextStyle(
                       fontSize: 13, color: AppColors.textSecondary)),
               const SizedBox(height: 28),
               _DialogButton(
@@ -1943,7 +1979,7 @@ class _GameOverDialog extends StatelessWidget {
                 onMenu();
               },
               child: Text('Main Menu',
-                  style: GoogleFonts.nunito(color: AppColors.textSecondary)),
+                  style: TextStyle(color: AppColors.textSecondary)),
             ),
           ],
         ),
@@ -1974,9 +2010,9 @@ class _DeadlockDialog extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(28),
         decoration: BoxDecoration(
-          color: AppColors.background,
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(28),
-          border: Border.all(color: AppColors.surfaceLight, width: 3),
+          border: Border.all(color: AppColors.surfaceLight),
           boxShadow: [
             BoxShadow(
               color: AppColors.primary.withValues(alpha: 0.15),
@@ -1996,7 +2032,7 @@ class _DeadlockDialog extends StatelessWidget {
             Text(
               'Deadlock Reached!',
               textAlign: TextAlign.center,
-              style: GoogleFonts.nunito(
+              style: TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.w900,
                 color: AppColors.textPrimary,
@@ -2006,7 +2042,7 @@ class _DeadlockDialog extends StatelessWidget {
             Text(
               'All remaining arrows are blocked. This can happen if they are cleared in the wrong sequence.\n\n💡 Hint: Try to trace the paths and see which arrows must escape first to clear the way for others!',
               textAlign: TextAlign.center,
-              style: GoogleFonts.nunito(
+              style: TextStyle(
                 fontSize: 14,
                 color: AppColors.textSecondary,
                 height: 1.4,
@@ -2041,7 +2077,7 @@ class _DeadlockDialog extends StatelessWidget {
               },
               child: Text(
                 'Back to Menu',
-                style: GoogleFonts.nunito(color: AppColors.textSecondary),
+                style: TextStyle(color: AppColors.textSecondary),
               ),
             ),
           ],
@@ -2090,7 +2126,7 @@ class _DialogButton extends StatelessWidget {
               Icon(icon, color: iconColor, size: 20),
               const SizedBox(width: 8),
               Text(label,
-                  style: GoogleFonts.nunito(
+                  style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
                       color: textColor)),
@@ -2118,7 +2154,7 @@ class _GameSettingsDialog extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.background,
           borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: AppColors.surfaceLight, width: 3),
+          border: Border.all(color: AppColors.surfaceLight),
           boxShadow: [
             BoxShadow(
               color: AppColors.primary.withValues(alpha: 0.15),
@@ -2130,8 +2166,8 @@ class _GameSettingsDialog extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Settings',
-              style: GoogleFonts.nunito(
+              'Take a breather',
+              style: TextStyle(
                 fontSize: 22,
                 fontWeight: FontWeight.w900,
                 color: AppColors.textPrimary,
@@ -2184,7 +2220,7 @@ class _GameSettingsDialog extends StatelessWidget {
               },
               child: Text(
                 'Resume Game',
-                style: GoogleFonts.nunito(
+                style: TextStyle(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
                   color: AppColors.primary,
@@ -2221,7 +2257,7 @@ class _DialogSettingsTile extends StatelessWidget {
           const SizedBox(width: 12),
           Text(
             label,
-            style: GoogleFonts.nunito(
+            style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
               color: AppColors.textPrimary,
@@ -2242,607 +2278,24 @@ class _DialogSettingsTile extends StatelessWidget {
   }
 }
 
-// ── Themed level loading screens ─────────────────────────────────────────────
+// ── Level loading ────────────────────────────────────────────────────────────
+const _normalLoadingMessages = ['Finding a little room to think…'];
 
-// Loading message banks per level type
-const _bossLoadingMessages = [
-  'Cooking devil sauce…',
-  'Summoning the beast…',
-  'Sharpening the claws…',
-  'Brewing chaos in a cauldron…',
-  'Waking the dungeon keeper…',
-  'Forging traps from darkness…',
-  'Stirring the dark arts…',
-  'Luring the monster out…',
-  'Preparing your punishment…',
-  'Cranking up the difficulty…',
-];
-
-const _godLoadingMessages = [
-  'Consulting the ancient scrolls…',
-  'Aligning the stars…',
-  'Channelling cosmic energy…',
-  'Weaving reality into knots…',
-  'Asking the oracle for a riddle…',
-  'Distilling the essence of madness…',
-  'Folding space and time…',
-  'Summoning the elder puzzle gods…',
-  'Rewriting the laws of physics…',
-  'Manifesting pure enlightenment…',
-];
-
-const _normalLoadingMessages = [
-  'Generating puzzle…',
-  'Placing arrows…',
-  'Shuffling the grid…',
-  'Building your challenge…',
-  'Crafting the layout…',
-];
-
-/// Typewriter widget — types out one character at a time, then pauses,
-/// then cycles to the next message in the list.
-class _TypewriterMessages extends StatefulWidget {
-  final List<String> messages;
-  final Color color;
-  final double fontSize;
-
-  const _TypewriterMessages({
-    required this.messages,
-    required this.color,
-    this.fontSize = 14,
-  });
-
-  @override
-  State<_TypewriterMessages> createState() => _TypewriterMessagesState();
-}
-
-class _TypewriterMessagesState extends State<_TypewriterMessages> {
-  int _msgIndex = 0;
-  int _charCount = 0;
-  bool _deleting = false;
-  static const _typeSpeed = Duration(milliseconds: 55);
-  static const _deleteSpeed = Duration(milliseconds: 25);
-  static const _pauseAfterType = Duration(milliseconds: 1800);
-  static const _pauseAfterDelete = Duration(milliseconds: 300);
-
-  @override
-  void initState() {
-    super.initState();
-    _tick();
-  }
-
-  void _tick() async {
-    if (!mounted) return;
-    final msg = widget.messages[_msgIndex];
-
-    if (!_deleting) {
-      if (_charCount < msg.length) {
-        await Future.delayed(_typeSpeed);
-        if (!mounted) return;
-        setState(() => _charCount++);
-        _tick();
-      } else {
-        // Fully typed — pause then start deleting
-        await Future.delayed(_pauseAfterType);
-        if (!mounted) return;
-        setState(() => _deleting = true);
-        _tick();
-      }
-    } else {
-      if (_charCount > 0) {
-        await Future.delayed(_deleteSpeed);
-        if (!mounted) return;
-        setState(() => _charCount--);
-        _tick();
-      } else {
-        // Fully deleted — pause then move to next message
-        await Future.delayed(_pauseAfterDelete);
-        if (!mounted) return;
-        setState(() {
-          _deleting = false;
-          _msgIndex = (_msgIndex + 1) % widget.messages.length;
-        });
-        _tick();
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final msg = widget.messages[_msgIndex];
-    final display = msg.substring(0, _charCount.clamp(0, msg.length));
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          display,
-          style: GoogleFonts.nunito(
-            fontSize: widget.fontSize,
-            fontWeight: FontWeight.w700,
-            color: widget.color,
-            letterSpacing: 0.5,
-          ),
-        ),
-        // Blinking cursor
-        _BlinkingCursor(color: widget.color),
-      ],
-    );
-  }
-}
-
-class _BlinkingCursor extends StatefulWidget {
-  final Color color;
-  const _BlinkingCursor({required this.color});
-
-  @override
-  State<_BlinkingCursor> createState() => _BlinkingCursorState();
-}
-
-class _BlinkingCursorState extends State<_BlinkingCursor>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 530),
-    )..repeat(reverse: true);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _ctrl,
-      builder: (_, __) => Opacity(
-        opacity: _ctrl.value > 0.5 ? 1.0 : 0.0,
-        child: Container(
-          margin: const EdgeInsets.only(left: 2),
-          width: 2,
-          height: 16,
-          color: widget.color,
-        ),
-      ),
-    );
-  }
-}
-
-/// Bouncing colored dots.
-class _BouncingDots extends StatefulWidget {
-  final Color? color;
-  const _BouncingDots({this.color});
-
-  @override
-  State<_BouncingDots> createState() => _BouncingDotsState();
-}
-
-class _BouncingDotsState extends State<_BouncingDots>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 900),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: List.generate(3, (i) {
-        return AnimatedBuilder(
-          animation: _ctrl,
-          builder: (_, __) {
-            final phase = (_ctrl.value + i * 0.33) % 1.0;
-            final t = (1 - (phase * 2 - 1).abs()).clamp(0.0, 1.0);
-            return Transform.translate(
-              offset: Offset(0, -8.0 * t),
-              child: Container(
-                margin: const EdgeInsets.symmetric(horizontal: 5),
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: (widget.color ?? AppColors.primary)
-                      .withValues(alpha: 0.5 + 0.5 * t),
-                  shape: BoxShape.circle,
-                ),
-              ),
-            );
-          },
-        );
-      }),
-    );
-  }
-}
-
-// ── Normal level loading screen ───────────────────────────────────────────────
-class _LevelLoadingScreen extends StatefulWidget {
+class _LevelLoadingScreen extends StatelessWidget {
   final int levelNumber;
   const _LevelLoadingScreen({required this.levelNumber});
 
   @override
-  State<_LevelLoadingScreen> createState() => _LevelLoadingScreenState();
-}
-
-class _LevelLoadingScreenState extends State<_LevelLoadingScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _pulse;
-
-  LevelType get _levelType => AppConstants.levelTypeFor(widget.levelNumber);
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    )..repeat(reverse: true);
-    _pulse = CurvedAnimation(parent: _controller, curve: Curves.easeInOut);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final type = _levelType;
-    if (type == LevelType.boss)
-      return _BossLoadingScreen(levelNumber: widget.levelNumber);
-    if (type == LevelType.god)
-      return _GodLoadingScreen(levelNumber: widget.levelNumber);
-    return _buildNormalScreen();
-  }
-
-  Widget _buildNormalScreen() {
-    return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(gradient: AppColors.bgGradient),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              AnimatedBuilder(
-                animation: _pulse,
-                builder: (_, __) => Transform.scale(
-                  scale: 0.88 + 0.12 * _pulse.value,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ArrowLine(
-                          direction: ArrowDirection.left,
-                          color: AppColors.arrowLeft,
-                          size: 48,
-                          strokeWidth: 5.5),
-                      const SizedBox(width: 8),
-                      ArrowLine(
-                          direction: ArrowDirection.up,
-                          color: AppColors.arrowUp,
-                          size: 48,
-                          strokeWidth: 5.5),
-                      const SizedBox(width: 8),
-                      ArrowLine(
-                          direction: ArrowDirection.right,
-                          color: AppColors.arrowRight,
-                          size: 48,
-                          strokeWidth: 5.5),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 28),
-              Text(
-                'Level ${widget.levelNumber}',
-                style: GoogleFonts.nunito(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.textPrimary,
-                  letterSpacing: 3,
-                ),
-              ),
-              const SizedBox(height: 16),
-              _TypewriterMessages(
-                messages: _normalLoadingMessages,
-                color: AppColors.textSecondary,
-              ),
-              const SizedBox(height: 32),
-              _BouncingDots(),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── Boss level loading screen ─────────────────────────────────────────────────
-class _BossLoadingScreen extends StatefulWidget {
-  final int levelNumber;
-  const _BossLoadingScreen({required this.levelNumber});
-  @override
-  State<_BossLoadingScreen> createState() => _BossLoadingScreenState();
-}
-
-class _BossLoadingScreenState extends State<_BossLoadingScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double> _flame;
-  static const _bossRed = Color(0xFFCC2200);
-  static const _bossGlow = Color(0xFFFF4422);
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 900))
-      ..repeat(reverse: true);
-    _flame = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF1A0500), Color(0xFF2D0A00), Color(0xFF0D0D0D)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Skull icon pulsing
-              AnimatedBuilder(
-                animation: _flame,
-                builder: (_, __) => Transform.scale(
-                  scale: 0.9 + 0.15 * _flame.value,
-                  child: Icon(
-                    LucideIcons.skull,
-                    size: 72 + 8 * _flame.value,
-                    color: Color.lerp(_bossRed, _bossGlow, _flame.value),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // BOSS badge
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _bossRed.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: _bossRed, width: 1.5),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(LucideIcons.swords, color: _bossGlow, size: 16),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Boss',
-                      style: GoogleFonts.nunito(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
-                        color: _bossGlow,
-                        letterSpacing: 4,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Icon(LucideIcons.swords, color: _bossGlow, size: 16),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Level number — blood red
-              AnimatedBuilder(
-                animation: _flame,
-                builder: (_, __) => Text(
-                  'Level ${widget.levelNumber}',
-                  style: GoogleFonts.nunito(
-                    fontSize: 32,
-                    fontWeight: FontWeight.w900,
-                    color: Color.lerp(_bossRed, _bossGlow, _flame.value),
-                    letterSpacing: 3,
-                    shadows: [
-                      Shadow(
-                          color: _bossGlow.withValues(
-                              alpha: 0.6 + 0.4 * _flame.value),
-                          blurRadius: 20)
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // Typewriter evil messages
-              _TypewriterMessages(
-                messages: _bossLoadingMessages,
-                color: _bossGlow.withValues(alpha: 0.85),
-                fontSize: 15,
-              ),
-              const SizedBox(height: 36),
-              _BouncingDots(color: _bossRed),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── God level loading screen ──────────────────────────────────────────────────
-class _GodLoadingScreen extends StatefulWidget {
-  final int levelNumber;
-  const _GodLoadingScreen({required this.levelNumber});
-  @override
-  State<_GodLoadingScreen> createState() => _GodLoadingScreenState();
-}
-
-class _GodLoadingScreenState extends State<_GodLoadingScreen>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
-  late Animation<double> _glow;
-  static const _godPurple = Color(0xFF7B2FBE);
-  static const _godGlow = Color(0xFFD78EFF);
-  static const _godGold = Color(0xFFFFD700);
-
-  @override
-  void initState() {
-    super.initState();
-    _ctrl = AnimationController(
-        vsync: this, duration: const Duration(milliseconds: 1600))
-      ..repeat(reverse: true);
-    _glow = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
-  }
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF0D0020), Color(0xFF1A0040), Color(0xFF050510)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-          ),
-        ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // Sparks / Star icon pulsing
-              AnimatedBuilder(
-                animation: _glow,
-                builder: (_, __) => Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // Outer glow
-                    Container(
-                      width: 100 + 12 * _glow.value,
-                      height: 100 + 12 * _glow.value,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: _godPurple.withValues(
-                                alpha: 0.3 + 0.3 * _glow.value),
-                            blurRadius: 40 + 20 * _glow.value,
-                            spreadRadius: 10,
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      LucideIcons.sparkles,
-                      size: 72 + 8 * _glow.value,
-                      color: Color.lerp(_godPurple, _godGlow, _glow.value),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // GOD badge
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _godPurple.withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                      color: _godGlow.withValues(alpha: 0.6), width: 1.5),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(LucideIcons.sparkles, color: _godGold, size: 16),
-                    const SizedBox(width: 8),
-                    Text(
-                      'God Mode',
-                      style: GoogleFonts.nunito(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
-                        color: _godGold,
-                        letterSpacing: 4,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    const Icon(LucideIcons.sparkles, color: _godGold, size: 16),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Level number — cosmic purple
-              AnimatedBuilder(
-                animation: _glow,
-                builder: (_, __) => Text(
-                  'Level ${widget.levelNumber}',
-                  style: GoogleFonts.nunito(
-                    fontSize: 32,
-                    fontWeight: FontWeight.w900,
-                    color: Color.lerp(_godPurple, _godGlow, _glow.value),
-                    letterSpacing: 3,
-                    shadows: [
-                      Shadow(
-                          color: _godGlow.withValues(
-                              alpha: 0.5 + 0.4 * _glow.value),
-                          blurRadius: 24)
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 20),
-
-              // Typewriter cosmic messages
-              _TypewriterMessages(
-                messages: _godLoadingMessages,
-                color: _godGlow.withValues(alpha: 0.85),
-                fontSize: 15,
-              ),
-              const SizedBox(height: 36),
-              _BouncingDots(color: _godPurple),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: AppColors.background,
+    body: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
+      const ArrowWordmark(size: 46),
+      const SizedBox(height: 28),
+      Text('Level $levelNumber', style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: AppColors.ink)),
+      const SizedBox(height: 12),
+      Text(_normalLoadingMessages.first, style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+      const SizedBox(height: 28),
+      SizedBox(width: 25, height: 25, child: CircularProgressIndicator(strokeWidth: 2.5, color: AppColors.primary)),
+    ])),
+  );
 }

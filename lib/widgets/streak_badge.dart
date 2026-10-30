@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:google_fonts/google_fonts.dart';
 import '../core/app_colors.dart';
 import '../core/constants.dart';
 
@@ -56,14 +55,14 @@ class StreakBadge extends StatelessWidget {
                   duration: 800.ms),
           const SizedBox(width: 6),
           Text('$days',
-              style: GoogleFonts.nunito(
+              style: TextStyle(
                 fontSize: 15,
                 fontWeight: FontWeight.w800,
                 color: _color,
               )),
           const SizedBox(width: 2),
           Text('days',
-              style: GoogleFonts.nunito(
+              style: TextStyle(
                 fontSize: 11,
                 color: _color.withValues(alpha: 0.7),
               )),

@@ -8,9 +8,11 @@ class AudioManager {
 
   bool _soundEnabled = true;
   bool _musicEnabled = true;
+  double _musicVolume = 0.6;
 
   bool get soundEnabled => _soundEnabled;
   bool get musicEnabled => _musicEnabled;
+  double get musicVolume => _musicVolume;
 
   final List<String> _exitSounds = [
     'swoosh_18.mp3',
@@ -29,6 +31,7 @@ class AudioManager {
       await FlameAudio.audioCache.loadAll([
         'click.ogg',
         'underwater.mp3',
+        'tap.wav', 'collision.wav', 'fail.wav', 'win.wav',
         ..._exitSounds,
       ]);
       // Pre-warm a pool of players for the click sound to ensure zero latency
@@ -60,7 +63,8 @@ class AudioManager {
     if (!_musicEnabled) return;
     try {
       if (FlameAudio.bgm.isPlaying) return;
-      await FlameAudio.bgm.play('underwater.mp3', volume: 0.35);
+      await FlameAudio.bgm.play('underwater.mp3',
+        'tap.wav', 'collision.wav', 'fail.wav', 'win.wav', volume: _musicVolume * 0.6);
     } catch (e) {
       debugPrint('Error playing background music: $e');
     }
@@ -97,9 +101,7 @@ class AudioManager {
     }
   }
 
-  Future<void> playArrowTap() async {
-    await playClick();
-  }
+  Future<void> playArrowTap() => _playTone('tap.wav');
 
   Future<void> playArrowExit() async {
     if (!_soundEnabled) return;
@@ -117,15 +119,33 @@ class AudioManager {
     }
   }
 
-  Future<void> playArrowBlock() async {}
+  Future<void> playArrowBlock() => _playTone('collision.wav');
 
-  Future<void> playLevelComplete() async {}
+  Future<void> playLevelComplete() => _playTone('win.wav');
 
-  Future<void> playLifeLost() async {}
+  Future<void> playLifeLost() => _playTone('collision.wav');
 
-  Future<void> playGameOver() async {}
+  Future<void> playGameOver() => _playTone('fail.wav');
 
-  Future<void> playStreakExtended() async {}
+  Future<void> playStreakExtended() => _playTone('win.wav');
+
+  Future<void> _playTone(String asset) async {
+    if (!_soundEnabled) return;
+    try {
+      await FlameAudio.play(asset, volume: 0.7);
+    } catch (e) {
+      debugPrint('Audio effect unavailable: $e');
+    }
+  }
+
+  void setMusicVolume(double value) {
+    _musicVolume = value.clamp(0.0, 1.0);
+    try {
+      FlameAudio.bgm.audioPlayer?.setVolume(_musicVolume * 0.6);
+    } catch (e) {
+      debugPrint('Music volume unavailable: $e');
+    }
+  }
 
   // ── Settings ──────────────────────────────────────────────────────────────────
 

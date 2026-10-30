@@ -1,0 +1,34 @@
+name: UI checks
+on:
+  push:
+    branches: ['arena/3301d7d1-arrow-v1']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  flutter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.29.3'
+          channel: stable
+          cache: true
+      - name: Configure local example ad IDs
+        run: cp lib/core/ad_secrets_example.dart lib/core/ad_secrets.dart
+      - run: flutter pub get
+      - name: Analyze
+        run: |
+          flutter analyze --no-pub > analysis.txt 2>&1 || true
+          cat analysis.txt
+      - name: UI and interaction tests
+        run: flutter test test/widget_test.dart --reporter expanded
+      - name: Build web preview
+        run: flutter build web --release --no-pub
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arrows-web-preview
+          path: build/web
+          retention-days: 3

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
@@ -43,7 +42,7 @@ class GameOverScreen extends StatelessWidget {
 
                 Text(
                   'Out of Lives!',
-                  style: GoogleFonts.nunito(
+                  style: TextStyle(
                     fontSize: 34,
                     fontWeight: FontWeight.w900,
                     color: AppColors.textPrimary,
@@ -54,7 +53,7 @@ class GameOverScreen extends StatelessWidget {
 
                 Text(
                   'Level $levelNumber',
-                  style: GoogleFonts.nunito(
+                  style: TextStyle(
                     fontSize: 16,
                     color: AppColors.textSecondary,
                   ),
@@ -104,7 +103,7 @@ class GameOverScreen extends StatelessWidget {
                             SnackBar(
                               content: Text(
                                 'Ad not completed. Try watching again or restart level.',
-                                style: GoogleFonts.nunito(
+                                style: TextStyle(
                                   fontWeight: FontWeight.w800,
                                   color: Colors.white,
                                 ),
@@ -147,7 +146,7 @@ class GameOverScreen extends StatelessWidget {
                     Navigator.pushReplacementNamed(context, '/menu');
                   },
                   child: Text('Main Menu',
-                      style: GoogleFonts.nunito(
+                      style: TextStyle(
                           color: AppColors.textSecondary, fontSize: 16)),
                 ).animate(delay: 700.ms).fadeIn(),
               ],
@@ -202,12 +201,12 @@ class _ActionButton extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(label,
-                    style: GoogleFonts.nunito(
+                    style: TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w800,
                         color: Colors.white)),
                 Text(subtitle,
-                    style: GoogleFonts.nunito(
+                    style: TextStyle(
                         fontSize: 12, color: Colors.white60)),
               ],
             ),

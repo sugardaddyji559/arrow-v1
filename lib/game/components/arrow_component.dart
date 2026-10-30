@@ -2,9 +2,11 @@ import 'package:flame/components.dart';
 import 'package:flame/effects.dart';
 import 'package:flame/events.dart';
 import 'package:flutter/material.dart';
+import 'dart:math' as math;
 
 import '../../core/constants.dart';
 import '../../core/app_colors.dart';
+import '../../core/audio_manager.dart';
 import '../../data/models/arrow.dart';
 import '../../data/models/level.dart';
 import '../game_state.dart';
@@ -28,6 +30,8 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
 
   bool _isAnimating = false;
   bool _isBlockedAnimating = false;
+  double _hintRemaining = 0;
+  double _hintPhase = 0;
   double _blockDuration = 0.0;
   double _blockTime = 0.0;
   double _maxBlockSlide = 0.0;
@@ -92,29 +96,40 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
     _invalidateCache();
   }
 
+  void showHint() {
+    _hintRemaining = 2.8;
+    _hintPhase = 0;
+    _isPreviewMode = false;
+  }
+
   // ── Hit test: tap anywhere along the arrow body ───────────────────────────
 
   @override
   bool containsLocalPoint(Vector2 point) {
     if (_isExiting) return false;
-    final margin = cellSize * 0.25;
-    for (final pt in arrowModel.path) {
-      final cellLeft = pt[1] * cellSize - margin;
-      final cellRight = (pt[1] + 1) * cellSize + margin;
-      final cellTop = pt[0] * cellSize - margin;
-      final cellBottom = (pt[0] + 1) * cellSize + margin;
-      if (point.x >= cellLeft && point.x <= cellRight &&
-          point.y >= cellTop && point.y <= cellBottom) {
-        return true;
-      }
+    if (gameState.isPaused || gameState.isGameOver || gameState.isComplete) return false;
+    final touch = Offset(point.x, point.y);
+    final radius = cellSize * 0.48;
+    for (var i = 0; i < arrowModel.path.length; i++) {
+      final a = arrowModel.path[i];
+      final b = arrowModel.path[i == 0 ? 0 : i - 1];
+      final start = Offset((a[1] + 0.5) * cellSize, (a[0] + 0.5) * cellSize);
+      final end = Offset((b[1] + 0.5) * cellSize, (b[0] + 0.5) * cellSize);
+      final segment = end - start;
+      final t = segment.distanceSquared == 0 ? 0.0
+          : ((touch - start).dx * segment.dx + (touch - start).dy * segment.dy) / segment.distanceSquared;
+      final nearest = start + segment * t.clamp(0.0, 1.0);
+      if ((touch - nearest).distanceSquared <= radius * radius) return true;
     }
     return false;
   }
 
   @override
   void onTapDown(TapDownEvent event) {
+    if (gameState.isPaused || gameState.isGameOver || _isAnimating) return;
     _isTouchDown = true;
     _longPressAccum = 0.0;
+    AudioManager.instance.playArrowTap();
   }
 
   @override
@@ -161,7 +176,7 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
   // ── Exit: head-first pull-through ────────────────────────────────────────
 
   void _startExitAnimation() {
-    _exitDuration = 0.4 + arrowModel.path.length * 0.08;
+    _exitDuration = (0.75 + arrowModel.path.length * 0.045).clamp(0.85, 2.8);
     _exitProgress = 0.0;
     _isExiting = true;
     _deflectedExtension = _buildDeflectedExtension();
@@ -315,8 +330,8 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
     _cachedHeadDist = dist[blockedExt.length];
     _cachedTailDist = dist[blockedExt.length + arrowModel.path.length - 1];
 
-    _maxBlockSlide = _cachedHeadDist!;
-    _blockDuration = 0.12 + (blockedExt.length - 1) * 0.06;
+    _maxBlockSlide = _cachedHeadDist!.clamp(0.0, cellSize * 0.7).toDouble();
+    _blockDuration = 0.28;
     _blockTime = 0.0;
     _isBlockedAnimating = true;
   }
@@ -339,6 +354,9 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
   @override
   void update(double dt) {
     super.update(dt);
+    if (gameState.isPaused) return;
+    _hintRemaining = (_hintRemaining - dt).clamp(0.0, 3.0).toDouble();
+    _hintPhase += dt * 4;
 
     // ── Long-press accumulator ──────────────────────────────────────────────
     if (_isTouchDown && !_isAnimating && !_isExiting) {
@@ -468,7 +486,7 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
       // ── 4. Compute animated head/tail positions ─────────────────────────────────────
       final double animHead, animTail;
       if (_isExiting) {
-        final traveled = (_exitProgress * tailDist).clamp(0.0, tailDist);
+        final traveled = (Curves.easeInOutCubic.transform(_exitProgress.clamp(0.0, 1.0)) * tailDist).clamp(0.0, tailDist);
         animHead = (headDist - traveled).clamp(0.0, headDist);
         animTail = (tailDist - traveled).clamp(0.0, tailDist);
       } else {
@@ -509,6 +527,22 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
     final sw = cellSize * 0.2; // Slightly sleek & clean arrow body thickness
 
     canvas.save();
+    final opacity = _isExiting && _exitProgress > 0.78
+        ? ((1 - _exitProgress) / 0.22).clamp(0.0, 1.0) : 1.0;
+    if (opacity < 1) canvas.saveLayer(null, Paint()..color = Color.fromARGB((opacity * 255).round(), 255, 255, 255));
+
+    // A mint pulse identifies a legal move without changing the puzzle.
+    if (_hintRemaining > 0 && !_isExiting) {
+      final halo = Path()..moveTo(pts.first.dx, pts.first.dy);
+      for (final p in pts.skip(1)) halo.lineTo(p.dx, p.dy);
+      canvas.drawPath(halo, Paint()
+        ..color = AppColors.primary.withValues(alpha: .40 + .25 * (1 + math.sin(_hintPhase)) / 2)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = cellSize * .58
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5));
+    }
 
     // ── 6. Draw body ──────────────────────────────────────────────────────
     final Path bodyPath;
@@ -545,6 +579,7 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
       }
     }
 
+    if (opacity < 1) canvas.restore();
     canvas.restore();
   }
 
@@ -725,7 +760,7 @@ class ArrowComponent extends PositionComponent with TapCallbacks, HasPaint {
 
   Color _color() {
     if (arrowModel.state == ArrowState.blocked || _isBlockedAnimating) {
-      return const Color(0xFFCC2200); // Vibrant red error color on block
+      return AppColors.heartRed; // Vibrant red error color on block
     }
     if (arrowModel.colorGroup != null) {
       return AppColors.getGroupColor(arrowModel.colorGroup!);

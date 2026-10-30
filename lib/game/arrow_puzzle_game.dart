@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 
-import '../../core/constants.dart';
+import '../core/constants.dart';
 import '../../data/models/level.dart';
 import 'components/grid_component.dart';
 import 'game_state.dart';
@@ -96,6 +96,12 @@ class ArrowPuzzleGame extends FlameGame {
     final gridY = (screenSize.y - gridPixelHeight) / 2;
 
     return (gridPixelWidth, gridX, gridY);
+  }
+
+  bool showHint() {
+    final id = gameState.nextSolvableArrowId;
+    if (id == null) return false;
+    return gridComponent?.highlightArrow(id) ?? false;
   }
 
   /// Reset board to initial state (restart level)

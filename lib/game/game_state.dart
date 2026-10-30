@@ -15,6 +15,8 @@ class GameState extends ChangeNotifier {
   bool _isComplete = false;
   bool _isGameOver = false;
   bool _isDeadlocked = false;
+  bool _isPaused = false;
+  bool _disposed = false;
 
   // Live orphan dot map (dots are removed when consumed by an exiting arrow)
   late Map<String, OrphanDotType> _orphanDots;
@@ -51,6 +53,32 @@ class GameState extends ChangeNotifier {
   bool get isComplete => _isComplete;
   bool get isGameOver => _isGameOver;
   bool get isDeadlocked => _isDeadlocked;
+  bool get isPaused => _isPaused;
+
+  void setPaused(bool value) {
+    if (_isPaused == value) return;
+    _isPaused = value;
+    notifyListeners();
+  }
+
+  /// Uses exactly the same collision and paired-arrow rules as a real tap.
+  String? get nextSolvableArrowId {
+    for (final arrow in _arrows) {
+      if (arrow.state == ArrowState.idle && !isArrowBlocked(arrow.id)) return arrow.id;
+    }
+    return null;
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
+  @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
   int get arrowsRemaining => _arrows.length;
   LevelModel get level => _currentLevel;
   /// Live orphan dots remaining (consumed dots are absent from this map).
@@ -118,7 +146,7 @@ class GameState extends ChangeNotifier {
         final arrow2 = groupArrows[1];
         final exitInfo1 = _computeExitInfo(arrow1, arrow2.id);
         final exitInfo2 = _computeExitInfo(arrow2, arrow1.id);
-        return exitInfo1.blocked || exitInfo2.blocked;
+        return exitInfo1.blocked && exitInfo2.blocked;
       }
     }
     return _computeExitInfo(arrow).blocked;
@@ -151,7 +179,7 @@ class GameState extends ChangeNotifier {
 
   /// Returns the outcome of tapping an arrow (snake).
   TapResult tapArrow(String arrowId) {
-    if (_isComplete || _isGameOver) return TapResult.ignored;
+    if (_isComplete || _isGameOver || _isPaused) return TapResult.ignored;
 
     final index = _arrows.indexWhere((a) => a.id == arrowId);
     if (index == -1) return TapResult.ignored;
@@ -214,6 +242,7 @@ class GameState extends ChangeNotifier {
 
     // Reset arrow state after animation
     Future.delayed(AppConstants.arrowShakeDuration, () {
+      if (_disposed) return;
       final idx = _arrows.indexWhere((a) => a.id == arrowId);
       if (idx != -1) {
         _arrows[idx] = _arrows[idx].copyWith(state: ArrowState.idle);
@@ -246,6 +275,7 @@ class GameState extends ChangeNotifier {
 
     // Reset both after animation
     Future.delayed(AppConstants.arrowShakeDuration, () {
+      if (_disposed) return;
       for (final arrow in groupArrows) {
         final idx = _arrows.indexWhere((a) => a.id == arrow.id);
         if (idx != -1) {
@@ -343,6 +373,7 @@ class GameState extends ChangeNotifier {
     _isComplete = false;
     _isGameOver = false;
     _isDeadlocked = false;
+    _isPaused = false;
     _clearedColorGroups.clear();
     notifyListeners();
   }

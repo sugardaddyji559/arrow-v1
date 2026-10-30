@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import '../models/level.dart';
 import '../../core/constants.dart';
@@ -8,6 +9,8 @@ import '../../core/audio_manager.dart';
 
 class ProgressRepository extends ChangeNotifier {
   final SharedPreferences? _prefs;
+  final DateTime Function() _clock;
+  DateTime get _now => _clock();
 
   // ── State fields ────────────────────────────────────────────────────────────
   int _lives = AppConstants.maxLives;
@@ -22,10 +25,14 @@ class ProgressRepository extends ChangeNotifier {
 
   // Level results
   final Map<int, LevelResult> _levelResults = {};
+  final Map<String, int> _dailyChallengeStars = {};
+  final Map<int, int> _tournamentBestSeconds = {};
+  bool _collectionSeen = true;
 
   // Settings
   bool _soundEnabled = true;
   bool _musicEnabled = true;
+  double _musicVolume = 0.6;
   bool _vibrationEnabled = true;
   ThemeMode _themeMode = ThemeMode.system;
 
@@ -53,6 +60,55 @@ class ProgressRepository extends ChangeNotifier {
 
   bool get soundEnabled => _soundEnabled;
   bool get musicEnabled => _musicEnabled;
+  double get musicVolume => _musicVolume;
+  int get completedLevelCount => _levelResults.values.where((r) => r.completed).length;
+  int get totalStars => _levelResults.values.fold(0, (sum, r) => sum + r.stars);
+  int get perfectLevelCount => _levelResults.values.where((r) => r.stars == 3).length;
+  bool get hasNewCollection => !_collectionSeen;
+  Map<String, int> get dailyChallengeStars => Map.unmodifiable(_dailyChallengeStars);
+  Map<int, int> get tournamentBestSeconds => Map.unmodifiable(_tournamentBestSeconds);
+
+  static String dateKey(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+  /// Stable across devices and sessions; challenges do not advance the campaign.
+  static int dailyChallengeLevel(DateTime date) =>
+      ((date.year * 372 + date.month * 31 + date.day) * 73 + 19) % 500 + 1;
+
+  bool isDailyChallengeComplete(DateTime date) => _dailyChallengeStars.containsKey(dateKey(date));
+  int completedChallengesInMonth(DateTime month) => _dailyChallengeStars.keys.where((key) {
+    final d = DateTime.tryParse(key);
+    return d != null && d.year == month.year && d.month == month.month;
+  }).length;
+
+  Future<void> markCollectionSeen() async {
+    if (_collectionSeen) return;
+    _collectionSeen = true;
+    await _prefs?.setBool('collectionSeen', true);
+    notifyListeners();
+  }
+
+  Future<bool> recordDailyChallenge(DateTime date, int stars, int score) async {
+    final key = dateKey(date);
+    if (_dailyChallengeStars.containsKey(key)) return false;
+    _dailyChallengeStars[key] = stars.clamp(1, 3);
+    _coins += score;
+    _totalScore += score;
+    _collectionSeen = false;
+    await _save();
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> recordTournamentBest(int level, int seconds) async {
+    final best = _tournamentBestSeconds[level];
+    if (best != null && best <= seconds) return false;
+    _tournamentBestSeconds[level] = math.max(1, seconds);
+    if (best == null) _coins += 50;
+    await _save();
+    notifyListeners();
+    return true;
+  }
   bool get vibrationEnabled => _vibrationEnabled;
   ThemeMode get themeMode => _themeMode;
   bool get hasSeen40x40Warning => _hasSeen40x40Warning;
@@ -72,7 +128,7 @@ class ProgressRepository extends ChangeNotifier {
 
   bool isLevelCompleted(int level) => _levelResults.containsKey(level);
 
-  ProgressRepository([this._prefs]) {
+  ProgressRepository([this._prefs, DateTime Function()? clock]) : _clock = clock ?? DateTime.now {
     _load();
   }
 
@@ -91,6 +147,21 @@ class ProgressRepository extends ChangeNotifier {
 
       _soundEnabled = _prefs!.getBool('soundEnabled') ?? true;
       _musicEnabled = _prefs!.getBool('musicEnabled') ?? true;
+      _musicVolume = (_prefs!.getDouble('musicVolume') ?? 0.6).clamp(0.0, 1.0).toDouble();
+      _collectionSeen = _prefs!.getBool('collectionSeen') ?? true;
+      final dailyJson = _prefs!.getString('dailyChallengeStars');
+      if (dailyJson != null) {
+        (jsonDecode(dailyJson) as Map<String, dynamic>).forEach((key, value) {
+          if (DateTime.tryParse(key) != null) _dailyChallengeStars[key] = (value as int).clamp(1, 3);
+        });
+      }
+      final tournamentJson = _prefs!.getString('tournamentBestSeconds');
+      if (tournamentJson != null) {
+        (jsonDecode(tournamentJson) as Map<String, dynamic>).forEach((key, value) {
+          final level = int.tryParse(key);
+          if (level != null) _tournamentBestSeconds[level] = value as int;
+        });
+      }
       _vibrationEnabled = _prefs!.getBool('vibrationEnabled') ?? true;
       _hasSeen40x40Warning = _prefs!.getBool('hasSeen40x40Warning') ?? false;
       _hasSeenZoomHint = _prefs!.getBool('hasSeenZoomHint') ?? false;
@@ -103,6 +174,7 @@ class ProgressRepository extends ChangeNotifier {
 
       // Synchronize to AudioManager
       AudioManager.instance.setSoundEnabled(_soundEnabled);
+      AudioManager.instance.setMusicVolume(_musicVolume);
       AudioManager.instance.setMusicEnabled(_musicEnabled);
 
       final lastPlayedStr = _prefs!.getString('lastPlayedDate');
@@ -139,6 +211,14 @@ class ProgressRepository extends ChangeNotifier {
         _prefs!.setInt('totalScore', _totalScore),
         _prefs!.setInt('coins', _coins),
         _prefs!.setInt('streakDays', _streakDays),
+        _prefs!.setBool('soundEnabled', _soundEnabled),
+        _prefs!.setBool('musicEnabled', _musicEnabled),
+        _prefs!.setBool('vibrationEnabled', _vibrationEnabled),
+        _prefs!.setDouble('musicVolume', _musicVolume),
+        _prefs!.setString('themeMode', _themeMode.name),
+        _prefs!.setBool('collectionSeen', _collectionSeen),
+        _prefs!.setString('dailyChallengeStars', jsonEncode(_dailyChallengeStars)),
+        _prefs!.setString('tournamentBestSeconds', jsonEncode(_tournamentBestSeconds.map((k, v) => MapEntry(k.toString(), v)))),
         if (_lastPlayedDate != null)
           _prefs!.setString('lastPlayedDate', _lastPlayedDate!.toIso8601String()),
       ]);
@@ -178,7 +258,7 @@ class ProgressRepository extends ChangeNotifier {
 
   void _updateStreak() {
     if (_lastPlayedDate == null) return;
-    final now = DateTime.now();
+    final now = _now;
     final today = DateTime(now.year, now.month, now.day);
     final lastPlayed = DateTime(
       _lastPlayedDate!.year,
@@ -194,7 +274,7 @@ class ProgressRepository extends ChangeNotifier {
   }
 
   Future<void> recordDailyPlay() async {
-    final now = DateTime.now();
+    final now = _now;
     final today = DateTime(now.year, now.month, now.day);
 
     if (_lastPlayedDate != null) {
@@ -221,7 +301,7 @@ class ProgressRepository extends ChangeNotifier {
 
   Future<void> protectStreak() async {
     // Called after watching a rewarded ad on streak break
-    _lastPlayedDate = DateTime.now();
+    _lastPlayedDate = _now;
     await _save();
     notifyListeners();
   }
@@ -235,6 +315,7 @@ class ProgressRepository extends ChangeNotifier {
     }
     _totalScore += result.score;
     _coins += result.score;
+    _collectionSeen = false;
     _currentLevel = result.levelNumber + 1;
     if (_currentLevel > _highestUnlockedLevel) {
       _highestUnlockedLevel = _currentLevel;
@@ -274,6 +355,13 @@ class ProgressRepository extends ChangeNotifier {
   Future<void> setVibrationEnabled(bool value) async {
     _vibrationEnabled = value;
     await _prefs?.setBool('vibrationEnabled', value);
+    notifyListeners();
+  }
+
+  Future<void> setMusicVolume(double value) async {
+    _musicVolume = value.clamp(0.0, 1.0).toDouble();
+    AudioManager.instance.setMusicVolume(_musicVolume);
+    await _prefs?.setDouble('musicVolume', _musicVolume);
     notifyListeners();
   }
 

@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'package:unity_ads_plugin/unity_ads_plugin.dart';
 import 'dart:async';
@@ -293,7 +292,7 @@ class AdManager {
                   const SizedBox(height: 16),
                   Text(
                     'Loading Ad...',
-                    style: GoogleFonts.nunito(
+                    style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w800,
                       color: AppColors.textPrimary,
